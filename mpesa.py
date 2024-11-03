@@ -62,7 +62,7 @@ def send_stk_push():
     print(json_resp)
 
 
-def query_status(self):
+def query_status():
         url = f"{MPESA_BASE_API_URL}/mpesa/stkpushquery/v1/query"
 
         payload = {
