@@ -2,6 +2,7 @@ import base64
 import datetime
 import json
 import os
+import sys
 import time
 import requests
 from requests.auth import HTTPBasicAuth
@@ -60,7 +61,7 @@ def log_to_file(data):
     data["timestamp"] = datetime.datetime.now().isoformat()
     try:
         with open(log_file, "a") as file:
-            file.write(json.dumps(data) + "\n")
+            file.write(json.dumps(data, indent=4) + "\n")
     except IOError as e:
         print(f"Failed to write to log file: {e}")
 
@@ -137,7 +138,18 @@ def query_status(checkout_request_id):
 
     log_to_file({"type": "Query Status Response", "data": json_resp})
 
-    return json_resp.get("ResultCode") == 0
+    result_code = json_resp.get("ResultCode")
+    result_desc = json_resp.get("ResultDesc")
+
+    if result_code == 0:
+        print("Transaction successful.")
+        return True
+    elif result_code == 1:
+        print(f"Transaction failed: {result_desc}")
+        sys.exit("Exiting program due to transaction failure.")
+    else:
+        print(f"Transaction status unknown: {result_desc}")
+        return False
 
 
 """
