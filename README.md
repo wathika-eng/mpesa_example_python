@@ -6,9 +6,11 @@
 git clone https://github.com/wathika-eng/mpesa_example_python --depth 1 && cd mpesa_example_python
 ```
 
-2. Install the dependencies
+2. Activate virtualenv and nstall the dependencies
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
