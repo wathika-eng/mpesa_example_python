@@ -10,6 +10,10 @@ __pycache__/
 # C extensions
 *.so
 
+# don't push logs
+*.log
+*.json
+
 # Distribution / packaging
 .Python
 build/

@@ -20,8 +20,24 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+On line 254 in `mpesa.py` after `main()` function, replace phone number with your phone number.
+
+```python
+    try:
+        mpesa_client = MPesaClient()
+
+        # Example transaction, change as needed
+        phone_number = "254746554245"
+```
+
 4. Run the application
 
 ```bash
 python mpesa.py
 ```
+
+## Sample output
+
+Response: ![image](https://i.ibb.co/grSGmCk/Screenshot-From-2024-11-20-18-48-24.png)
+
+Logs: ![sampleLogs](https://i.ibb.co/rtdJ3MR/Screenshot-From-2024-11-20-18-55-21.png)
