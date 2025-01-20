@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MPesa Payment</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4" 
+    integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <style>
+        /* Basic reset and layout */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* Container for the form and status */
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+
+        label {
+            font-size: 16px;
+            margin: 8px 0;
+            display: block;
+        }
+
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        button {
+            background-color: #28a745;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        button:hover {
+            background-color: #218838;
+        }
+
+        /* Status messages */
+        .success {
+            color: green;
+            font-size: 18px;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .error {
+            color: red;
+            font-size: 16px;
+            margin: 10px 0;
+        }
+
+        .checkmark {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: green;
+            color: white;
+            text-align: center;
+            line-height: 20px;
+            margin-right: 10px;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        /* Loading indicator */
+        #loading {
+            display: none;
+            background-color: yellow;
+            color: #333;
+            padding: 10px;
+            margin-top: 20px;
+            text-align: center;
+            border-radius: 5px;
+        }
+
+        ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+
+        ul li {
+            margin-bottom: 8px;
+        }
+
+        .status-container {
+            margin-top: 20px;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MPesa Payment</h1>
+        <form id="paymentForm">
+            <label for="phone_number">Phone Number:</label>
+            <input type="text" id="phone_number" name="phone_number" required>
+            <label for="amount">Amount:</label>
+            <input type="number" id="amount" name="amount" required>
+            <!-- Add the reCAPTCHA widget inside your form -->
+            <div class="g-recaptcha" data-sitekey="6LfE2L0qAAAAAOZ1tmF6yR4rQiqEgt_yBJFQ9Bag"></div>
+            <button type="button" onclick="initiatePayment()">Pay</button>
+        </form>
+
+        <div id="status" class="status-container"></div>
+        <div id="loading" class="error">Processing payment... Please wait.</div>
+    </div>
+
+    <script>
+        function initiatePayment() {
+            const phoneNumber = document.getElementById('phone_number').value.trim();
+            const amount = document.getElementById('amount').value.trim();
+            const recaptchaResponse = grecaptcha.getResponse();
+
+            // Validate inputs
+            if (!phoneNumber || !amount) {
+                document.getElementById('status').innerHTML = `<p class="error">Phone number and amount are required.</p>`;
+                return;
+            }
+
+            // Validate reCAPTCHA
+            if (!recaptchaResponse) {
+                document.getElementById('status').innerHTML = `<p class="error">Please complete the reCAPTCHA.</p>`;
+                return;
+            }
+
+            // Show loading indicator
+            document.getElementById('loading').style.display = 'block';
+
+            // Send payment request
+            fetch('/initiate_payment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ phone_number: phoneNumber, amount: amount, recaptcha_response: recaptchaResponse }),
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                document.getElementById('loading').style.display = 'none'; // Hide loading
+                if (data.checkout_request_id) {
+                    checkStatus(data.checkout_request_id);
+                } else {
+                    document.getElementById('status').innerHTML = `<p class="error">Error initiating payment: ${data.error || 'Unknown error'}</p>`;
+                }
+            })
+            .catch(error => {
+                document.getElementById('loading').style.display = 'none'; // Hide loading
+                document.getElementById('status').innerHTML = `<p class="error">Error initiating payment: ${error.message}</p>`;
+            });
+        }
+
+        function checkStatus(checkoutRequestId) {
+            fetch('/check_status', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ checkout_request_id: checkoutRequestId }),
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                const statusContainer = document.getElementById('status');
+                if (data.result_code === 0) {
+                    // Payment successful, display transaction details with checkmark
+                    const transactionDetails = data.transaction_details;
+                    statusContainer.innerHTML = `
+                        <p class="success"><span class="checkmark">✓</span>Payment Successful!</p>
+                        <ul>
+                            <li><strong>Checkout Request ID:</strong> ${transactionDetails.checkout_request_id}</li>
+                            <li><strong>Amount:</strong> ${transactionDetails.amount}</li>
+                            <li><strong>Mpesa Receipt Number:</strong> ${transactionDetails.mpesa_receipt_number}</li>
+                            <li><strong>Transaction Date:</strong> ${transactionDetails.transaction_date}</li>
+                            <li><strong>Phone Number:</strong> ${transactionDetails.phone_number}</li>
+                        </ul>
+                    `;
+                } else {
+                    // Payment failed, show the error
+                    statusContainer.innerHTML = `<p class="error">Payment Failed: ${data.result_desc || 'Unknown error'}</p>`;
+                }
+            })
+            .catch(error => {
+                document.getElementById('status').innerHTML = `<p class="error">Error checking status: ${error.message}</p>`;
+            });
+        }
+    </script>
+</body>
+</html>

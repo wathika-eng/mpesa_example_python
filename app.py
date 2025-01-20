@@ -1,20 +1,19 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import json
 import logging
 from typing import Dict, Any
 from dotenv import load_dotenv
 import os
 from flask_sqlalchemy import SQLAlchemy
+import requests
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Retrieve the PostgreSQL connection string
-database_url = os.getenv("DATABASE_URL")
-
+# Retrieve the database connection string
+database_url = os.getenv("DATABASE_URL", "sqlite:///mpesa.db")
 if not database_url:
-    database_url = "sqlite:///mpesa.db"
-    print(f"Using default SQLite database: {database_url}")
+    raise RuntimeError("DATABASE_URL not configured. Please check your .env file.")
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +29,6 @@ app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
-
 # Define the Transaction model
 class Transaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -42,7 +40,7 @@ class Transaction(db.Model):
     transaction_date = db.Column(db.String(20), nullable=True)
     phone_number = db.Column(db.String(15), nullable=True)
 
-
+# MPesa Callback Processor
 class MPesaCallback:
     @staticmethod
     def process_callback(callback_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -50,12 +48,10 @@ class MPesaCallback:
             body = callback_data.get("Body", {})
             stkCallback = body.get("stkCallback", {})
 
+            # Extract transaction details
             checkout_request_id = stkCallback.get("CheckoutRequestID")
             result_code = stkCallback.get("ResultCode")
             result_desc = stkCallback.get("ResultDesc")
-
-            if not checkout_request_id or result_code is None or not result_desc:
-                raise ValueError("Missing required fields in callback data")
 
             transaction_details = {
                 "checkout_request_id": checkout_request_id,
@@ -67,11 +63,10 @@ class MPesaCallback:
                 "phone_number": None,
             }
 
-            if result_code == 0:  # Successful transaction
-                callback_metadata = stkCallback.get("CallbackMetadata", {}).get(
-                    "Item", []
-                )
-                for item in callback_metadata:
+            # If successful, process metadata
+            if result_code == 0:
+                metadata_items = stkCallback.get("CallbackMetadata", {}).get("Item", [])
+                for item in metadata_items:
                     name = item.get("Name")
                     value = item.get("Value")
                     if name == "Amount":
@@ -83,20 +78,77 @@ class MPesaCallback:
                     elif name == "PhoneNumber":
                         transaction_details["phone_number"] = value
 
-            logger.info(
-                f"Processed callback for CheckoutRequestID: {checkout_request_id}"
-            )
+            logger.info(f"Processed callback: {transaction_details}")
             return transaction_details
 
         except Exception as e:
-            logger.error(f"Error processing callback data: {e}")
-            raise
+            logger.error(f"Error processing callback: {e}")
+            raise ValueError("Invalid callback data structure.")
 
+def verify_recaptcha(recaptcha_response):
+    secret_key = os.getenv("RECAPTCHA_SECRET_KEY")
+    if not secret_key:
+        raise RuntimeError("RECAPTCHA_SECRET_KEY not configured. Please check your .env file.")
+    url = "https://www.google.com/recaptcha/api/siteverify"
+    payload = {
+        'secret': secret_key,
+        'response': recaptcha_response
+    }
+    response = requests.post(url, data=payload)
+    result = response.json()
+    return result.get('success', False)
 
-@app.route("/test", methods=["GET"])
-def test():
-    return jsonify({"message": "Hello, World!"})
+@app.route("/")
+def index():
+    return render_template("index.html")
 
+@app.route("/initiate_payment", methods=["POST"])
+def initiate_payment():
+    try:
+        data = request.json
+        phone_number = data.get("phone_number")
+        amount = data.get("amount")
+        recaptcha_response = data.get("recaptcha_response")
+
+        if not phone_number or not amount:
+            return jsonify({"error": "Phone number and amount are required"}), 400
+
+        if not verify_recaptcha(recaptcha_response):
+            return jsonify({"error": "Invalid reCAPTCHA. Please try again."}), 400
+
+        try:
+            amount = float(amount)  # Convert to float for numerical operations
+        except ValueError:
+            return jsonify({"error": "Invalid amount format"}), 400
+
+        # Initialize MPesa client
+        mpesa_client = MPesaClient()
+        checkout_request_id = mpesa_client.send_stk_push(phone_number, amount)
+
+        return jsonify({"checkout_request_id": checkout_request_id}), 200
+
+    except Exception as e:
+        logger.error(f"Error initiating payment: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/check_status", methods=["POST"])
+def check_status():
+    try:
+        data = request.json
+        checkout_request_id = data.get("checkout_request_id")
+
+        if not checkout_request_id:
+            return jsonify({"error": "Checkout request ID is required"}), 400
+
+        # Initialize MPesa client
+        mpesa_client = MPesaClient()
+        status = mpesa_client.query_transaction_status(checkout_request_id)
+
+        return jsonify(status), 200
+
+    except Exception as e:
+        logger.error(f"Error checking status: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/mpesa/callback", methods=["POST"])
 def mpesa_callback():
@@ -104,23 +156,25 @@ def mpesa_callback():
         callback_data = request.get_json()
         logger.info(f"Received callback: {json.dumps(callback_data, indent=2)}")
 
+        # Process the callback to extract transaction details
         transaction_details = MPesaCallback.process_callback(callback_data)
-        logger.info(
-            f"Processed transaction details: {json.dumps(transaction_details, indent=2)}"
-        )
+        
+        # Log processed transaction details
+        logger.info(f"Processed callback for CheckoutRequestID: {transaction_details['checkout_request_id']}")
+        logger.info(f"Processed transaction details: {json.dumps(transaction_details, indent=2)}")
 
+        # Store the transaction in the database
         store_transaction_details(transaction_details)
 
-        return jsonify(
-            {"ResultCode": 0, "ResultDesc": "Callback processed successfully"}
-        ), 200
-
+        # Return transaction details as response
+        return jsonify({
+            "ResultCode": 0,
+            "ResultDesc": "Callback processed successfully",
+            "transaction_details": transaction_details
+        }), 200
     except Exception as e:
         logger.error(f"Callback processing failed: {e}")
-        return jsonify(
-            {"ResultCode": 1, "ResultDesc": f"Callback processing failed: {e}"}
-        ), 500
-
+        return jsonify({"ResultCode": 1, "ResultDesc": str(e)}), 500
 
 def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
     try:
@@ -135,14 +189,11 @@ def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
         )
         db.session.add(transaction)
         db.session.commit()
-        logger.info(
-            f"Transaction {transaction_details['checkout_request_id']} stored successfully"
-        )
+        logger.info(f"Stored transaction: {transaction_details['checkout_request_id']}")
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Failed to store transaction details: {e}")
-        raise
-
+        logger.error(f"Failed to store transaction: {e}")
+        raise e
 
 if __name__ == "__main__":
     with app.app_context():
