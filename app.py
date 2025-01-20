@@ -12,9 +12,7 @@ load_dotenv()
 # Retrieve the PostgreSQL connection string
 database_url = os.getenv("DATABASE_URL")
 
-if database_url:
-    print(f"Database URL: {database_url}")
-else:
+if not database_url:
     database_url = "sqlite:///mpesa.db"
     print(f"Using default SQLite database: {database_url}")
 
@@ -44,51 +42,21 @@ class Transaction(db.Model):
     transaction_date = db.Column(db.String(20), nullable=True)
     phone_number = db.Column(db.String(15), nullable=True)
 
-    def __init__(
-        self,
-        checkout_request_id,
-        result_code,
-        result_desc,
-        amount=None,
-        mpesa_receipt_number=None,
-        transaction_date=None,
-        phone_number=None,
-    ):
-        self.checkout_request_id = checkout_request_id
-        self.result_code = result_code
-        self.result_desc = result_desc
-        self.amount = amount
-        self.mpesa_receipt_number = mpesa_receipt_number
-        self.transaction_date = transaction_date
-        self.phone_number = phone_number
-
 
 class MPesaCallback:
     @staticmethod
     def process_callback(callback_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process the callback data from M-Pesa and extract relevant transaction details.
-
-        Args:
-            callback_data (Dict[str, Any]): Raw callback data from M-Pesa
-
-        Returns:
-            Dict[str, Any]: Processed transaction details
-        """
         try:
             body = callback_data.get("Body", {})
             stkCallback = body.get("stkCallback", {})
 
-            # Extract basic transaction details
             checkout_request_id = stkCallback.get("CheckoutRequestID")
             result_code = stkCallback.get("ResultCode")
             result_desc = stkCallback.get("ResultDesc")
 
-            # Validate required fields
-            if not checkout_request_id or not result_code or not result_desc:
+            if not checkout_request_id or result_code is None or not result_desc:
                 raise ValueError("Missing required fields in callback data")
 
-            # Initialize transaction details
             transaction_details = {
                 "checkout_request_id": checkout_request_id,
                 "result_code": result_code,
@@ -99,17 +67,13 @@ class MPesaCallback:
                 "phone_number": None,
             }
 
-            # If transaction was successful, extract additional details
             if result_code == 0:  # Successful transaction
                 callback_metadata = stkCallback.get("CallbackMetadata", {}).get(
                     "Item", []
                 )
-
-                # Process callback metadata
                 for item in callback_metadata:
                     name = item.get("Name")
                     value = item.get("Value")
-
                     if name == "Amount":
                         transaction_details["amount"] = value
                     elif name == "MpesaReceiptNumber":
@@ -126,10 +90,9 @@ class MPesaCallback:
 
         except Exception as e:
             logger.error(f"Error processing callback data: {e}")
-            raise ValueError(f"Invalid callback data structure: {e}")
+            raise
 
 
-# Flask Routes
 @app.route("/test", methods=["GET"])
 def test():
     return jsonify({"message": "Hello, World!"})
@@ -137,20 +100,15 @@ def test():
 
 @app.route("/mpesa/callback", methods=["POST"])
 def mpesa_callback():
-    """
-    Flask endpoint to handle M-Pesa callbacks.
-    """
     try:
         callback_data = request.get_json()
         logger.info(f"Received callback: {json.dumps(callback_data, indent=2)}")
 
-        # Process the callback
         transaction_details = MPesaCallback.process_callback(callback_data)
         logger.info(
             f"Processed transaction details: {json.dumps(transaction_details, indent=2)}"
         )
 
-        # Store transaction details in the database
         store_transaction_details(transaction_details)
 
         return jsonify(
@@ -160,27 +118,12 @@ def mpesa_callback():
     except Exception as e:
         logger.error(f"Callback processing failed: {e}")
         return jsonify(
-            {"ResultCode": 1, "ResultDesc": f"Callback processing failed: {str(e)}"}
+            {"ResultCode": 1, "ResultDesc": f"Callback processing failed: {e}"}
         ), 500
 
 
 def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
-    """
-    Store transaction details in the database.
-
-    Args:
-        transaction_details (Dict[str, Any]): Processed transaction details
-    """
     try:
-        # Validate required fields
-        if (
-            not transaction_details.get("checkout_request_id")
-            or not transaction_details.get("result_code")
-            or not transaction_details.get("result_desc")
-        ):
-            raise ValueError("Missing required transaction details")
-
-        # Create a new Transaction object
         transaction = Transaction(
             checkout_request_id=transaction_details["checkout_request_id"],
             result_code=transaction_details["result_code"],
@@ -190,24 +133,18 @@ def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
             transaction_date=transaction_details.get("transaction_date"),
             phone_number=transaction_details.get("phone_number"),
         )
-
-        # Add and commit the transaction to the database
         db.session.add(transaction)
         db.session.commit()
         logger.info(
             f"Transaction {transaction_details['checkout_request_id']} stored successfully"
         )
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Failed to store transaction details: {e}")
-        raise e
+        raise
 
 
-# Run the application
 if __name__ == "__main__":
-    from app import app, db
-
     with app.app_context():
-        db.create_all()  # Create database tables if they don't exist
+        db.create_all()
     app.run(port=5000, debug=True)
