@@ -9,7 +9,7 @@ __pycache__/
 .venv
 # C extensions
 *.so
-
+*.json
 # don't push logs
 *.log
 *.json
