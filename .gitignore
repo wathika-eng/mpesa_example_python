@@ -13,7 +13,7 @@ __pycache__/
 # don't push logs
 *.log
 *.json
-
+*.db
 # Distribution / packaging
 .Python
 build/

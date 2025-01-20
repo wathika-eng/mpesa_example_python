@@ -15,7 +15,8 @@ database_url = os.getenv("DATABASE_URL")
 if database_url:
     print(f"Database URL: {database_url}")
 else:
-    print("DATABASE_URL not found in .env file")
+    database_url = "sqlite:///mpesa.db"
+    print(f"Using default SQLite database: {database_url}")
 
 # Configure logging
 logging.basicConfig(
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False  # Disable modification tracking
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
 
@@ -62,7 +63,6 @@ class Transaction(db.Model):
         self.phone_number = phone_number
 
 
-# MPesa Callback Processor
 class MPesaCallback:
     @staticmethod
     def process_callback(callback_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,6 +83,10 @@ class MPesaCallback:
             checkout_request_id = stkCallback.get("CheckoutRequestID")
             result_code = stkCallback.get("ResultCode")
             result_desc = stkCallback.get("ResultDesc")
+
+            # Validate required fields
+            if not checkout_request_id or not result_code or not result_desc:
+                raise ValueError("Missing required fields in callback data")
 
             # Initialize transaction details
             transaction_details = {
@@ -142,6 +146,9 @@ def mpesa_callback():
 
         # Process the callback
         transaction_details = MPesaCallback.process_callback(callback_data)
+        logger.info(
+            f"Processed transaction details: {json.dumps(transaction_details, indent=2)}"
+        )
 
         # Store transaction details in the database
         store_transaction_details(transaction_details)
@@ -157,7 +164,6 @@ def mpesa_callback():
         ), 500
 
 
-# Helper Functions
 def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
     """
     Store transaction details in the database.
@@ -200,6 +206,8 @@ def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
 
 # Run the application
 if __name__ == "__main__":
+    from app import app, db
+
     with app.app_context():
         db.create_all()  # Create database tables if they don't exist
     app.run(port=5000, debug=True)
