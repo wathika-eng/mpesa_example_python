@@ -1,11 +1,15 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 import os
 from flask_sqlalchemy import SQLAlchemy
+import queue
+import threading
 import requests
+
+from mpesa import MPesaClient, normalize_phone_number
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,6 +33,9 @@ app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
+# Global message queue for SSE
+message_queue = queue.Queue()
+
 # Define the Transaction model
 class Transaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -39,6 +46,21 @@ class Transaction(db.Model):
     mpesa_receipt_number = db.Column(db.String(100), nullable=True)
     transaction_date = db.Column(db.String(20), nullable=True)
     phone_number = db.Column(db.String(15), nullable=True)
+
+def verify_recaptcha(recaptcha_response: str) -> bool:
+    recaptcha_secret = os.getenv("RECAPTCHA_SECRET_KEY")
+    if not recaptcha_secret:
+        logger.error("RECAPTCHA_SECRET_KEY not configured. Please check your .env file.")
+        return False
+
+    payload = {
+        'secret': recaptcha_secret,
+        'response': recaptcha_response
+    }
+    response = requests.post("https://www.google.com/recaptcha/api/siteverify", data=payload)
+    result = response.json()
+
+    return result.get("success", False)
 
 # MPesa Callback Processor
 class MPesaCallback:
@@ -85,19 +107,6 @@ class MPesaCallback:
             logger.error(f"Error processing callback: {e}")
             raise ValueError("Invalid callback data structure.")
 
-def verify_recaptcha(recaptcha_response):
-    secret_key = os.getenv("RECAPTCHA_SECRET_KEY")
-    if not secret_key:
-        raise RuntimeError("RECAPTCHA_SECRET_KEY not configured. Please check your .env file.")
-    url = "https://www.google.com/recaptcha/api/siteverify"
-    payload = {
-        'secret': secret_key,
-        'response': recaptcha_response
-    }
-    response = requests.post(url, data=payload)
-    result = response.json()
-    return result.get('success', False)
-
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -110,14 +119,23 @@ def initiate_payment():
         amount = data.get("amount")
         recaptcha_response = data.get("recaptcha_response")
 
+        # Validate inputs
         if not phone_number or not amount:
             return jsonify({"error": "Phone number and amount are required"}), 400
 
+        # Normalize phone number
+        try:
+            phone_number = normalize_phone_number(phone_number)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        # Validate reCAPTCHA
         if not verify_recaptcha(recaptcha_response):
             return jsonify({"error": "Invalid reCAPTCHA. Please try again."}), 400
 
+        # Convert amount to float
         try:
-            amount = float(amount)  # Convert to float for numerical operations
+            amount = float(amount)
         except ValueError:
             return jsonify({"error": "Invalid amount format"}), 400
 
@@ -166,6 +184,9 @@ def mpesa_callback():
         # Store the transaction in the database
         store_transaction_details(transaction_details)
 
+        # Broadcast the transaction details to all connected clients
+        message_queue.put(transaction_details)
+
         # Return transaction details as response
         return jsonify({
             "ResultCode": 0,
@@ -175,6 +196,23 @@ def mpesa_callback():
     except Exception as e:
         logger.error(f"Callback processing failed: {e}")
         return jsonify({"ResultCode": 1, "ResultDesc": str(e)}), 500
+
+@app.route("/stream")
+def stream():
+    def event_stream():
+        try:
+            while True:
+                # Wait for a new message in the queue
+                transaction_details = message_queue.get(timeout=10)
+                yield f"data: {json.dumps(transaction_details)}\n\n"
+        except queue.Empty:
+            # If the queue is empty, send a keep-alive comment
+            yield ": keep-alive\n\n"
+        except Exception as e:
+            logger.error(f"Error in event stream: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(event_stream(), mimetype="text/event-stream")
 
 def store_transaction_details(transaction_details: Dict[str, Any]) -> None:
     try:

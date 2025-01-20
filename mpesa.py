@@ -6,6 +6,7 @@ import sys
 import time
 import logging
 from typing import Dict, Optional
+from flask import jsonify
 import requests
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
@@ -132,8 +133,11 @@ class MPesaClient:
         """
         # Input validation
         if not phone_number or not phone_number.startswith("254"):
-            raise ValueError("Invalid phone number. Must start with 254")
-
+            try:
+                phone_number = normalize_phone_number(phone_number)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+            
         if amount <= 0:
             raise ValueError("Amount must be a positive number")
 
@@ -242,6 +246,21 @@ class MPesaClient:
 
         raise MPesaError("Unable to query transaction status after maximum retries")
 
+def normalize_phone_number(phone_number: str) -> str:
+    """
+    Normalize the phone number to start with 254.
+    Supports inputs like +254..., 07..., or 7...
+    """
+    # Remove any non-digit characters (e.g., +, spaces)
+    phone_number = ''.join(filter(str.isdigit, phone_number))
+
+    # Check if the number starts with 254, 07, or 7
+    if phone_number.startswith('254'):
+        return phone_number  # Already in the correct format
+    elif phone_number.startswith('07') or phone_number.startswith('7'):
+        return '254' + phone_number.lstrip('07')  # Convert to 254 format
+    else:
+        raise ValueError("Invalid phone number format. Must start with +254, 07, or 7.")
 
 def main():
     """
