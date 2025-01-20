@@ -10,7 +10,7 @@
     <!-- Alpine.js -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <!-- reCAPTCHA -->
-    <script src="https://www.google.com/recaptcha/api.js"></script>
+    <!-- <script src="https://www.google.com/recaptcha/api.js"></script> -->
     <style>
         /* Basic reset and layout */
         body {
@@ -133,10 +133,11 @@
             <input type="text" id="phone_number" x-model="phoneNumber" required>
             <label for="amount">Amount:</label>
             <input type="number" id="amount" x-model="amount" required>
-            
+            <!-- class="g-recaptcha" 
+                    data-sitekey="6LfE2L0qAAAAAOZ1tmF6yR4rQiqEgt_yBJFQ9Bag"  -->
             <!-- reCAPTCHA -->
-            <button class="g-recaptcha" 
-                    data-sitekey="6LfE2L0qAAAAAOZ1tmF6yR4rQiqEgt_yBJFQ9Bag" 
+            <button type="submit"
+                    class="g-recaptcha"
                     data-callback="onSubmit" 
                     data-action="submit">Pay</button>
         </form>
@@ -206,7 +207,7 @@
                 body: JSON.stringify({
                     phone_number: this.phoneNumber,
                     amount: this.amount,
-                    recaptcha_response: grecaptcha.getResponse(),
+                    // recaptcha_response: grecaptcha.getResponse(),
                 })
             })
             .then(response => response.json())
